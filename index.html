@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>タイプライター</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;600&family=Special+Elite&display=swap" rel="stylesheet">
+
+<style>
+html,body{
+  margin:0;
+  min-height:100%;
+}
+
+body {
+  background: #f4f1e9;
+  
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  
+  font-family: "Special Elite", "Courier New", monospace;
+}
+
+/* 紙ノイズ */
+body::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  background-image: radial-gradient(rgba(0,0,0,.03) 1px, transparent 1px);
+  background-size:3px 3px;
+  opacity:.18;
+  pointer-events:none;
+  mix-blend-mode:multiply;
+}
+
+/* =========================
+   レイアウト（重要修正済み）
+========================= */
+
+.wrapper{
+  width:80%;
+  max-width:900px;
+  
+  margin-top:10vh;
+
+  background:#f8f4e8;   /* 紙色 */
+  border:2px solid #1e2022;
+
+  display:grid;
+
+  padding:20px;
+  box-sizing:border-box;
+
+  height:auto;
+  max-height:257mm;
+}
+
+/* 重ね構造 */
+.render,
+textarea{
+  grid-area:1 / 1;
+
+  margin:0;
+  border:0;
+
+  padding:20px;
+  box-sizing:border-box;
+
+  font-size:18px;
+  line-height:1.6;
+
+  font-family:"Special Elite","Courier New",monospace;
+
+  white-space:pre-wrap;
+  word-break:break-word;
+
+  width:100%;
+  height:auto;
+
+  display:block;   /* ★grid廃止（重要） */
+
+  font-kerning:none;
+  font-variant-ligatures:none;
+  tab-size:4;
+}
+
+/* 表示レイヤー */
+.render{
+  pointer-events:none;
+  color:#1e2022;
+}
+
+/* 入力レイヤー */
+textarea{
+  background:transparent;
+  color:transparent;
+  caret-color:#1e2022;
+
+  resize:none;
+  outline:none;
+
+  overflow:hidden;
+}
+
+/* =========================
+   日本語装飾（安全化済み）
+========================= */
+
+.jp{
+  display:inline;   /* ★重要：absolute影響を切る */
+  position:relative;
+  color:transparent;
+}
+
+.jp::before{
+  content:attr(data-char);
+
+  position:absolute;
+  inset:0;
+
+  font-family:"Noto Serif JP","Yu Mincho",serif;
+  color:#111;
+  opacity:.96;
+
+  transform:
+    translateY(-10px)
+    scale(1.03,1.02)
+    translate(.15px,.1px);
+
+  filter:url(#woodcut);
+
+  text-shadow:
+    .3px 0 rgba(0,0,0,.08),
+    -.2px .2px rgba(0,0,0,.05);
+
+  mix-blend-mode:multiply;
+  pointer-events:none;
+}
+
+.jp::after{
+  content:attr(data-char);
+
+  position:absolute;
+  inset:0;
+
+  font-family:"Noto Serif JP","Yu Mincho",serif;
+  color:#000;
+  opacity:.13;
+
+  transform:
+    translateY(-10px)
+    translate(.6px,.4px)
+    scale(1.02);
+
+  filter:blur(.45px);
+  mix-blend-mode:multiply;
+
+  pointer-events:none;
+
+  -webkit-mask-image:
+    radial-gradient(circle at 60% 40%, transparent 30%, black 72%);
+  mask-image:
+    radial-gradient(circle at 60% 40%, transparent 30%, black 72%);
+}
+
+#typewriter {
+  width: 70vw;
+  max-height: 90vh;
+  object-fit: contain;
+  cursor: pointer;
+}
+
+.wrapper {
+  display: none;
+  position: absolute;
+  z-index: 10;
+}
+
+.wrapper.show {
+  display: grid;
+}
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .85);
+  
+  display: none;
+  
+  z-index: 5;
+}
+
+#overlay.show {
+  display: block;
+}
+
+</style>
+</head>
+
+<body>
+  
+  <img src="typewriter.png" id="typewriter">
+
+<svg width="0" height="0">
+  <filter id="woodcut">
+    <feTurbulence type="fractalNoise"
+      baseFrequency="0.55"
+      numOctaves="2"
+      seed="7"
+      result="noise"/>
+
+    <feDisplacementMap
+      in="SourceGraphic"
+      in2="noise"
+      scale="1.8"
+      xChannelSelector="R"
+      yChannelSelector="G"/>
+  </filter>
+</svg>
+
+<div id="overlay"></div>
+
+<div class="wrapper">
+
+  <div class="render" id="render"></div>
+  <textarea id="input"></textarea>
+
+</div>
+
+<script>
+const input = document.getElementById("input");
+const render = document.getElementById("render");
+
+const typewriter = document.getElementById("typewriter");
+
+const imgClosed1 = "typewriter.png";
+const imgClosed2 = "typewriter_2.png";
+const imgOpen = "typewriter_3.png";
+
+let blinkInterval = null;
+let blinkState = false;
+
+const overlay = document.getElementById("overlay");
+const wrapper = document.querySelector(".wrapper");
+
+/* =========================
+   Audio
+========================= */
+
+const AudioContextClass =
+  window.AudioContext || window.webkitAudioContext;
+
+const audioCtx = new AudioContextClass();
+
+let keyBuffer = null;
+let bellBuffer = null;
+
+/* =========================
+   Audio load
+========================= */
+
+async function loadAudio(url) {
+  const res = await fetch(url);
+  const arr = await res.arrayBuffer();
+  return await audioCtx.decodeAudioData(arr);
+}
+
+function play(buffer) {
+  if (!buffer) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(audioCtx.destination);
+  src.start();
+}
+
+(async () => {
+  try {
+    keyBuffer = await loadAudio("./key.mp3");
+    bellBuffer = await loadAudio("./bell.mp3");
+  } catch (e) {
+    console.warn(e);
+  }
+})();
+
+/* =========================
+   テキスト表示
+========================= */
+
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function splitGraphemes(str) {
+  return Array.from(
+    new Intl.Segmenter("ja", { granularity: "grapheme" })
+    .segment(str),
+    s => s.segment
+  );
+}
+function escapeAttr(str) {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+function isZenkaku(c) {
+  return /[^\x00-\x7F]/.test(c);
+}
+
+function wrapText(text) {
+  let html = "";
+  
+  for (const c of splitGraphemes(text)) {
+    if (c === "\n") {
+      html += "<br>";
+      continue;
+    }
+    
+    const e = escapeHtml(c);
+    
+    if (isZenkaku(c)) {
+      html += `<span class="jp" data-char="${escapeAttr(e)}">${e}</span>`;
+    } else {
+      html += e;
+    }
+  }
+  
+  return html;
+}
+
+function update() {
+  render.innerHTML = wrapText(input.value);
+}
+
+input.addEventListener("input", update);
+
+/* =========================
+   キー音
+========================= */
+
+input.addEventListener("keydown", async (e) => {
+  
+  if (audioCtx.state === "suspended") {
+  audioCtx.resume();
+}
+  
+  if (e.key === "Enter") {
+    play(bellBuffer);
+  } else if (e.key.length === 1 || e.key === "Backspace") {
+    play(keyBuffer);
+  }
+});
+
+function startBlink() {
+  stopBlink();
+  
+  blinkInterval = setInterval(() => {
+    blinkState = !blinkState;
+    typewriter.src = blinkState ? imgClosed1 : imgClosed2;
+  }, 600);
+}
+
+function stopBlink() {
+  if (blinkInterval) {
+    clearInterval(blinkInterval);
+    blinkInterval = null;
+  }
+}
+
+async function openWriter() {
+  overlay.classList.add("show");
+  wrapper.classList.add("show");
+  
+  input.focus();
+  
+  if (audioCtx.state === "suspended") {
+    await audioCtx.resume();
+  }
+  
+  play(keyBuffer);
+  
+  // ★追加：開いた状態の画像にする
+  stopBlink();
+  typewriter.src = imgOpen;
+}
+/* =========================
+   画像クリックで開く（＋音）
+========================= */
+
+typewriter.addEventListener("click", openWriter);
+/* =========================
+   閉じる
+========================= */
+
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space") {
+    
+    // 入力中なら無効（重要）
+    if (document.activeElement === input) return;
+    
+    // スクロール防止
+    e.preventDefault();
+    
+    // まだ開いてない時だけ開く
+    if (!wrapper.classList.contains("show")) {
+      openWriter();
+    }
+  }
+});
+
+overlay.addEventListener("click", () => {
+  
+  overlay.classList.remove("show");
+  wrapper.classList.remove("show");
+  
+  // ★追加：閉じた状態に戻す
+  startBlink();
+  typewriter.src = imgClosed1;
+});
+
+update();
+input.focus();
+
+startBlink();
+
+window.addEventListener("pointerdown", () => {
+  audioCtx.resume();
+}, { once: true });
+</script>
+
+</body>
+</html>
